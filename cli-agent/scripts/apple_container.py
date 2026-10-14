@@ -2,7 +2,7 @@
 """Run Medulla workflows with Apple's `container` CLI."""
 from __future__ import annotations
 
-import os
+import os as os  # re-exported for focused process tests
 import platform as platform  # re-exported for focused preflight tests
 import shutil as shutil  # re-exported for focused preflight tests
 import signal
@@ -30,7 +30,7 @@ from medulla.scripts.apple_entry import main as _entry_main
 from medulla.scripts.apple_entry import (
     plain_status_is_running as plain_status_is_running,
 )
-from medulla.scripts.dockerlib.process import HARNESS_ENV_KEYS
+from medulla.scripts.dockerlib.process import docker_client_env, forwarded_env_values
 
 INTERRUPT_GRACE_S = 5
 
@@ -128,14 +128,8 @@ def build_run_command(image: str, volumes: list[str], args: list[str],
     if shared.interactive_stdio():
         cmd.append("-t")
 
-    for key in HARNESS_ENV_KEYS:
-        value = os.environ.get(key)
-        if value:
-            cmd.extend(["-e", f"{key}={value}"])
-    if not os.environ.get("GEMINI_API_KEY") and os.environ.get("GOOGLE_API_KEY"):
-        cmd.extend(["-e", f"GEMINI_API_KEY={os.environ['GOOGLE_API_KEY']}"])
-    if shared.dockerenv.env_file_for_run:
-        cmd.extend(["--env-file", shared.dockerenv.env_file_for_run])
+    for key in forwarded_env_values():
+        cmd.extend(["-e", key])
 
     cmd.extend(volumes)
     for path in shared.dockerpaths.shadow_paths_for_run:
@@ -155,6 +149,9 @@ def run_apple(image: str, volumes: list[str], args: list[str],
               runs_under: str | None = None,
               run_dir_name: str | None = None) -> int:
     container_name = f"medulla-{uuid.uuid4().hex[:8]}"
+    if run_dir_name:
+        safe = "".join(c if (c.isalnum() or c in "_.-") else "-" for c in run_dir_name)
+        container_name = f"medulla-{safe}"
     cmd = build_run_command(image, volumes, args, container_name,
                             run_dir_name=run_dir_name, runs_under=runs_under)
     stdin = None if sys.stdin.isatty() else subprocess.DEVNULL
@@ -190,7 +187,8 @@ def run_apple(image: str, volumes: list[str], args: list[str],
     rc = 130
     try:
         if not interrupted["count"]:
-            proc = subprocess.Popen(cmd, stdin=stdin, start_new_session=True)
+            proc = subprocess.Popen(cmd, stdin=stdin, start_new_session=True,
+                                    env=docker_client_env(runs_under, run_dir_name))
             proc_ref["proc"] = proc
             if interrupted["count"]:
                 force = interrupted["count"] > 1
@@ -204,7 +202,6 @@ def run_apple(image: str, volumes: list[str], args: list[str],
                 thread = schedule_force_cleanup(
                     container_name, proc_ref["proc"], force_now, cleanup_failed)
             thread.join()
-        shared._unlink_env_file()
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, previous_term)
     return 1 if cleanup_failed.is_set() else rc

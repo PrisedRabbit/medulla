@@ -64,6 +64,9 @@ def _copy_bundle_over(src: Path, dst: Path) -> None:
             if target.is_symlink():         # never write through a file symlink
                 print(f"  skip symlink {target} (left as-is)")
                 continue
+            if f == "SKILL.md":
+                _replace_file(Path(base_dir) / f, target)
+                continue
             # Replace the NAME, not the contents. copy2 writes through to the same
             # inode, and bash reads a script as it executes it — so refreshing under
             # a running spar-run.sh fed it new bytes at an old offset and it died on

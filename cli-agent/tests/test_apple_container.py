@@ -13,7 +13,7 @@ def apple(monkeypatch):
     spec = importlib.util.spec_from_file_location("apple_container", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.shared.dockerenv.env_file_for_run = None
+    monkeypatch.setattr(module.shared.dockerenv, "env_values_for_run", {})
     module.shared.dockerpaths.shadow_paths_for_run = []
     return module
 
@@ -23,7 +23,7 @@ def test_build_run_command_matches_medulla_mount_and_sandbox_contract(
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     monkeypatch.setattr(apple.shared, "interactive_stdio", lambda: False)
     monkeypatch.setenv("OPENAI_API_KEY", "token")
-    apple.shared.dockerenv.env_file_for_run = "/tmp/merged.env"
+    apple.shared.dockerenv.env_values_for_run = {"OPENAI_API_KEY": "selected-token"}
     apple.shared.dockerpaths.shadow_paths_for_run = ["secrets"]
 
     cmd = apple.build_run_command(
@@ -32,8 +32,10 @@ def test_build_run_command_matches_medulla_mount_and_sandbox_contract(
     assert cmd[:10] == [
         "container", "run", "--init", "--rm", "--name", "medulla-a",
         "--cpus", "4", "--memory", "4g"]
-    assert ["-e", "OPENAI_API_KEY=token"] == cmd[10:12]
-    assert cmd[cmd.index("--env-file") + 1] == "/tmp/merged.env"
+    assert ["-e", "OPENAI_API_KEY"] == cmd[10:12]
+    assert "--env-file" not in cmd
+    assert not any("token" in arg for arg in cmd)
+    assert apple.docker_client_env()["OPENAI_API_KEY"] == "selected-token"
     assert "/host:/workspace" in cmd
     assert cmd[cmd.index("--tmpfs") + 1] == "/workspace/secrets"
     assert "MEDULLA_DOCKER=1" in cmd
@@ -400,7 +402,6 @@ def test_interrupted_run_force_deletes_named_container(apple, monkeypatch):
         lambda name, proc, wake, failed: (
             scheduled.append((name, proc, wake, failed)), Thread())[1],
     )
-    monkeypatch.setattr(apple.shared, "_unlink_env_file", lambda: None)
 
     assert apple.run_apple("medulla:test", [], ["-w", "flow"]) == 130
     assert len(kills) == 1 and kills[0][1] == "INT"
@@ -487,7 +488,6 @@ def test_run_handlers_stay_installed_until_cleanup_finishes(apple, monkeypatch):
     monkeypatch.setattr(apple, "kill_container", lambda *args: None)
     monkeypatch.setattr(
         apple, "schedule_force_cleanup", lambda name, proc, wake, failed: Thread())
-    monkeypatch.setattr(apple.shared, "_unlink_env_file", lambda: None)
 
     assert apple.run_apple("medulla:test", [], ["-w", "flow"]) == 130
     assert handler_during_join == [True]
@@ -518,7 +518,6 @@ def test_run_forwards_sigterm_as_term(apple, monkeypatch):
         apple, "kill_container", lambda name, signal_name=None: kills.append(signal_name))
     monkeypatch.setattr(
         apple, "schedule_force_cleanup", lambda name, proc, wake, failed: Thread())
-    monkeypatch.setattr(apple.shared, "_unlink_env_file", lambda: None)
 
     assert apple.run_apple("medulla:test", [], ["-w", "flow"]) == 130
     assert kills == ["TERM"]
@@ -552,7 +551,6 @@ def test_run_cleanup_failure_is_not_reported_as_clean_interrupt(apple, monkeypat
         apple, "schedule_force_cleanup",
         lambda name, proc, wake, failed: Thread(failed),
     )
-    monkeypatch.setattr(apple.shared, "_unlink_env_file", lambda: None)
 
     assert apple.run_apple("medulla:test", [], ["-w", "flow"]) == 1
 

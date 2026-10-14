@@ -131,31 +131,23 @@ def main(run_apple: Callable[..., int]) -> int:
     claude_home = (Path(claude_config).expanduser().resolve() if claude_config
                    else Path.home() / ".claude")
     shared.dockerpaths.shadow_paths_for_run = shared.read_shadow_paths(workflow)
-    dotenv = shared._collect_dotenv(workflow)
-    shared._add_claude_token_fallback(dotenv)
-    if dotenv:
-        import atexit
-        import tempfile
-        fd, shared.dockerenv.env_file_for_run = tempfile.mkstemp(prefix="medulla-env-")
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            for key, value in dotenv.items():
-                handle.write(f"{key}={value}\n")
-        atexit.register(shared._unlink_env_file)
-
+    try:
+        secret_policy, selected_env = shared.prepare_run_secrets(
+            workflow, shared._collect_dotenv, shared._add_claude_token_fallback, cli_vars,
+        )
+    except shared.SecretPolicyError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+    shared.dockerenv.env_values_for_run = selected_env
     volumes = shared.build_volumes(
-        claude_home, mount_agy=shared.workflow_uses_agy(workflow),
-        cwd_ro=cwd_ro, runs_folder=runs_folder)
+        claude_home, cwd_ro=cwd_ro, runs_folder=runs_folder,
+        credential_bundles=secret_policy["bundles"], credential_env=selected_env)
     shared_runs_under = None
     if workflow:
         resolved = shared._config_yaml(Path(workflow))
         if shared.definition_is_outside_workspace(resolved) and resolved.is_file():
             dest, name = shared.runs_under_for(Path(workflow)), resolved.parent.name
             mount_root = f"/mnt/medulla-workflows/{name}"
-            volumes.extend(["-v", f"{resolved}:{mount_root}/workflow.yaml:ro"])
-            for source in sorted(path for path in resolved.parent.iterdir() if path.is_dir()):
-                if source.name not in ("runs", "__pycache__"):
-                    volumes.extend(["-v", f"{source}:{mount_root}/{source.name}:ro"])
+            volumes.extend(["-v", f"{resolved.parent}:{mount_root}:ro"])
             args = [f"{mount_root}/workflow.yaml" if arg == str(workflow) else arg
                     for arg in args]
             shared_runs_under = str(dest)

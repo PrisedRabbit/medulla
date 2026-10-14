@@ -72,7 +72,7 @@ def entry() -> int:
         if "--help" in rest:
             print("usage: medulla init <name> [--skill [--apple]] [--local]")
             print("  deploy a bundled workflow or scaffold a new one")
-            print("  --skill registers SKILL.md with claude-code, codex, and opencode")
+            print("  --skill registers SKILL.md machine-wide with claude-code and codex")
             print("  --apple makes the installed skill use Apple Container")
             print("          bundled Docker skills stay on Docker by default")
             print("  --local installs into this project instead of machine-wide")
@@ -119,6 +119,10 @@ def entry() -> int:
         else:
             rc = (deploy_template(name, local=local) if bundled
                   else scaffold_workflow(name))
+        if rc == 0 and want_skill:
+            if want_apple and bundled:
+                from .init import filter_host_harnesses
+                rc = filter_host_harnesses(wdir)
         if rc == 0 and want_skill:
             rc = install_skill_md(name, wdir, local=local, apple=want_apple)
         return rc

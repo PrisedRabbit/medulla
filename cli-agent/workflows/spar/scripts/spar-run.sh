@@ -167,6 +167,17 @@ box_for() {
     printf '%s\n' "$HOME/.medulla/panel-runs/${slug}-${tag}"
 }
 
+input_box_for() {
+    local root="$1" slug tag
+    if [ -n "${MEDULLA_PANEL_INPUTS:-}" ]; then
+        printf '%s\n' "$MEDULLA_PANEL_INPUTS"
+        return 0
+    fi
+    slug=$(basename "$root")
+    tag=$(printf '%s' "$root" | shasum 2>/dev/null | cut -c1-8)
+    printf '%s\n' "$HOME/.medulla/panel-inputs/${slug}-${tag}"
+}
+
 force_repo_root() {
     # Never trust the caller's CWD. Started from src/payments/, everything below would
     # be right and useless: the box lands there, the panel mounts that subtree as its
@@ -226,10 +237,13 @@ cmd_start() {
     force_repo_root
     preflight
 
-    local box; box=$(box_for "$PWD")
-    mkdir -p "$box" || die "cannot create $box"
-    # The engine prints physical paths. Resolve after mkdir so a symlinked run
-    # root (or a relative override) is compared using the same spelling below.
+    local box input_box
+    box=$(box_for "$PWD")
+    input_box="$box"
+    if [ "$CONTAINER_RUNTIME" = apple ]; then
+        input_box=$(input_box_for "$PWD")
+    fi
+    mkdir -p "$box" "$input_box" || die "cannot create panel run/input folders"
     box=$(cd "$box" && pwd -P) || die "cannot resolve $box"
     # A fixed name races: fire-and-forget is the whole design, and a second start
     # before the first medulla read its var-file would silently swap the question.
@@ -239,7 +253,9 @@ cmd_start() {
     # panel. Seen live — the script printed a run from eight minutes earlier.
     local id qfile log err
     id=$(date +%H%M%S)-$$
-    qfile="$box/question.$id.md"; log="$box/run.$id.log"; err="$box/err.$id.log"
+    # Apple Container rejects a nested read-only file mount inside the writable runs
+    # mount. Keep immutable question snapshots in a sibling tree, never in $box.
+    qfile="$input_box/question.$id.md"; log="$box/run.$id.log"; err="$box/err.$id.log"
     cp "$question" "$qfile" || die "cannot write $qfile"
 
     # Container mode also mounts the tree read-only; native mode cannot, so the

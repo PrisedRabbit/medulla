@@ -121,8 +121,8 @@ def ensure_image(image: str, build: bool, workflow: str | None, cli_vars: dict,
     return proc.returncode
 
 
-def image_home(image: str, fallback: str = "/home/medulla") -> str:
-    """Read the image user's HOME through Apple Container, with a safe fallback."""
+def image_home(image: str) -> str:
+    """Read the image user's HOME before choosing credential mount destinations."""
     try:
         result = subprocess.run(
             ["container", "run", "--rm", "--entrypoint", "sh", image,
@@ -131,6 +131,6 @@ def image_home(image: str, fallback: str = "/home/medulla") -> str:
         home = result.stdout.strip()
         if result.returncode == 0 and home.startswith("/") and home != "/":
             return home
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return fallback
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"error: cannot determine HOME for Apple image {image}: {exc}") from exc
+    raise SystemExit(f"error: cannot determine HOME for Apple image {image}")
